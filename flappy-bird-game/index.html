@@ -2,30 +2,72 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#4ec0ca">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="msapplication-tap-highlight" content="no">
     <title>Flappy Bird</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
             background: #2c3e50;
+            -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            touch-action: none;
+            overscroll-behavior: none;
+            -webkit-overflow-scrolling: auto;
+            position: fixed;
+            top: 0;
+            left: 0;
+        }
+
+        body {
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            overflow: hidden;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            -webkit-tap-highlight-color: transparent;
-            user-select: none;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
         }
+
         #gameContainer {
             position: relative;
-            border-radius: 12px;
+            border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 0 40px rgba(0,0,0,0.5), 0 0 80px rgba(0,0,0,0.2);
+            box-shadow: 0 0 30px rgba(0,0,0,0.4);
+            touch-action: none;
         }
+
         canvas {
             display: block;
             cursor: pointer;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            image-rendering: auto;
+        }
+
+        /* Prevent iOS overscroll */
+        @supports (-webkit-touch-callout: none) {
+            body {
+                min-height: -webkit-fill-available;
+            }
+            html {
+                height: -webkit-fill-available;
+            }
         }
     </style>
 </head>
@@ -36,24 +78,61 @@
 
     <script>
     (() => {
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
+        'use strict';
 
-        // Responsive sizing
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const container = document.getElementById('gameContainer');
+
+        // ── Responsive sizing with devicePixelRatio ──
         const BASE_W = 400;
         const BASE_H = 600;
         let scale = 1;
+        let dpr = 1;
+        let canvasOffsetX = 0;
+        let canvasOffsetY = 0;
 
         function resize() {
-            const maxW = window.innerWidth * 0.95;
-            const maxH = window.innerHeight * 0.95;
-            scale = Math.min(maxW / BASE_W, maxH / BASE_H, 1.5);
-            canvas.width = BASE_W * scale;
-            canvas.height = BASE_H * scale;
-            ctx.setTransform(scale, 0, 0, scale, 0, 0);
+            dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+            const safeTop = parseInt(getComputedStyle(document.body).paddingTop) || 0;
+            const safeBottom = parseInt(getComputedStyle(document.body).paddingBottom) || 0;
+            const safeLeft = parseInt(getComputedStyle(document.body).paddingLeft) || 0;
+            const safeRight = parseInt(getComputedStyle(document.body).paddingRight) || 0;
+
+            const availW = window.innerWidth - safeLeft - safeRight;
+            const availH = window.innerHeight - safeTop - safeBottom;
+
+            scale = Math.min(availW / BASE_W, availH / BASE_H);
+
+            const cssW = Math.floor(BASE_W * scale);
+            const cssH = Math.floor(BASE_H * scale);
+
+            canvas.style.width = cssW + 'px';
+            canvas.style.height = cssH + 'px';
+            canvas.width = Math.floor(cssW * dpr);
+            canvas.height = Math.floor(cssH * dpr);
+
+            container.style.width = cssW + 'px';
+            container.style.height = cssH + 'px';
+
+            ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+
+            const rect = canvas.getBoundingClientRect();
+            canvasOffsetX = rect.left;
+            canvasOffsetY = rect.top;
         }
+
         resize();
         window.addEventListener('resize', resize);
+        window.addEventListener('orientationchange', () => {
+            setTimeout(resize, 150);
+            setTimeout(resize, 300);
+            setTimeout(resize, 500);
+        });
+        if (screen && screen.orientation) {
+            screen.orientation.addEventListener('change', () => setTimeout(resize, 200));
+        }
 
         // ── Game Constants ──
         const GRAVITY = 0.45;
@@ -61,17 +140,28 @@
         const PIPE_WIDTH = 60;
         const PIPE_GAP = 145;
         const PIPE_SPEED = 2.5;
-        const PIPE_INTERVAL = 1600; // ms
+        const PIPE_INTERVAL = 1600;
         const BIRD_X = 80;
         const BIRD_RADIUS = 15;
         const GROUND_H = 80;
         const PLAY_H = BASE_H - GROUND_H;
 
         // ── Game State ──
-        let bird, pipes, score, bestScore, gameState, lastPipeTime, frameCount, particles;
-        bestScore = parseInt(localStorage.getItem('flappyBest') || '0');
-
         const GameState = { MENU: 0, PLAYING: 1, DYING: 2, DEAD: 3 };
+        let bird, pipes, score, bestScore, gameState, lastPipeTime, frameCount, particles;
+        let isPaused = false;
+
+        bestScore = parseInt(safeStorageGet('flappyBest') || '0');
+
+        function safeStorageGet(key) {
+            try { return localStorage.getItem(key); }
+            catch(e) { return null; }
+        }
+
+        function safeStorageSet(key, val) {
+            try { localStorage.setItem(key, val); }
+            catch(e) { /* silent fail for private browsing */ }
+        }
 
         function init() {
             bird = {
@@ -140,8 +230,15 @@
             });
         }
 
-        // ── Input ──
+        // ── Input Handling (Cross-Platform) ──
+        let lastFlapTime = 0;
+        const FLAP_COOLDOWN = 80; // ms debounce to prevent double inputs
+
         function flap() {
+            const now = performance.now();
+            if (now - lastFlapTime < FLAP_COOLDOWN) return;
+            lastFlapTime = now;
+
             if (gameState === GameState.MENU) {
                 gameState = GameState.PLAYING;
                 bird.vel = FLAP_FORCE;
@@ -159,24 +256,85 @@
             }
         }
 
+        // Keyboard (PC)
         document.addEventListener('keydown', e => {
-            if (e.code === 'Space' || e.code === 'ArrowUp') {
+            if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'Enter' || e.code === 'KeyW') {
                 e.preventDefault();
+                e.stopPropagation();
                 flap();
             }
+        }, { passive: false });
+
+        // Mouse (PC)
+        canvas.addEventListener('mousedown', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            flap();
+        }, { passive: false });
+
+        // Touch (iOS + Android)
+        canvas.addEventListener('touchstart', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            flap();
+        }, { passive: false });
+
+        // Prevent all default touch behaviors on the whole document
+        document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+        document.addEventListener('touchend', e => {
+            // Only prevent default on the game area
+            if (e.target === canvas || e.target === container) {
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        // Prevent context menu on long press (Android)
+        canvas.addEventListener('contextmenu', e => e.preventDefault());
+        document.addEventListener('contextmenu', e => e.preventDefault());
+
+        // Prevent double-tap zoom on iOS
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', e => {
+            const now = Date.now();
+            if (now - lastTouchEnd <= 300) {
+                e.preventDefault();
+            }
+            lastTouchEnd = now;
+        }, { passive: false });
+
+        // Prevent iOS pull-to-refresh & bounce scrolling
+        document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+        document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
+        document.addEventListener('gestureend', e => e.preventDefault(), { passive: false });
+
+        // ── Visibility handling: pause when tab hidden ──
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                isPaused = true;
+            } else {
+                isPaused = false;
+                lastTime = performance.now();
+                accumulator = 0;
+            }
         });
-        canvas.addEventListener('mousedown', e => { e.preventDefault(); flap(); });
-        canvas.addEventListener('touchstart', e => { e.preventDefault(); flap(); }, { passive: false });
+
+        // Handle window blur (e.g., switching apps on mobile)
+        window.addEventListener('blur', () => {
+            isPaused = true;
+        });
+        window.addEventListener('focus', () => {
+            isPaused = false;
+            lastTime = performance.now();
+            accumulator = 0;
+        });
 
         // ── Collision ──
         function checkCollision() {
             const bx = BIRD_X, by = bird.y, r = BIRD_RADIUS - 2;
 
-            // Ground & ceiling
             if (by + r >= PLAY_H || by - r <= 0) return true;
 
             for (const pipe of pipes) {
-                // Bounding box overlap check (circle vs rect)
                 if (bx + r > pipe.x && bx - r < pipe.x + PIPE_WIDTH) {
                     if (by - r < pipe.topH || by + r > pipe.bottomY) {
                         return true;
@@ -197,7 +355,21 @@
             ctx.fillRect(x, y, w, h);
         }
 
-        // ── Draw Background ──
+        function roundRect(x, y, w, h, r) {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+        }
+
+        // ── Background ──
         const cloudPositions = [
             { x: 50, y: 60, w: 80, h: 30 },
             { x: 200, y: 100, w: 100, h: 35 },
@@ -206,10 +378,8 @@
         ];
 
         function drawBackground() {
-            // Sky gradient
-            drawGradientRect(0, 0, BASE_W, PLAY_H, '#4ec0ca', '#71c5cf');
+            drawGradientRect(0, 0, BASE_W, BASE_H, '#4ec0ca', '#71c5cf');
 
-            // Clouds
             ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
             const offset = (frameCount * 0.3) % (BASE_W + 120);
             cloudPositions.forEach(c => {
@@ -228,12 +398,9 @@
 
         function drawGround() {
             const groundY = PLAY_H;
-            // Main ground
             drawGradientRect(0, groundY, BASE_W, GROUND_H, '#ded895', '#d2c560');
-            // Top strip
             ctx.fillStyle = '#5baf4b';
             ctx.fillRect(0, groundY, BASE_W, 15);
-            // Grass details
             ctx.fillStyle = '#4a9e3b';
             const gOff = (frameCount * PIPE_SPEED) % 40;
             for (let i = -1; i < BASE_W / 20 + 1; i++) {
@@ -246,7 +413,7 @@
             }
         }
 
-        // ── Draw Pipe ──
+        // ── Pipe ──
         function drawPipe(pipe) {
             const x = pipe.x;
             const capH = 26;
@@ -254,32 +421,28 @@
             const bodyW = PIPE_WIDTH;
             const capW = bodyW + capOverhang * 2;
 
-            // Top pipe body
+            // Top pipe
             drawGradientRect(x, 0, bodyW, pipe.topH - capH, '#5cbf2a', '#73d147', false);
-            // Top pipe cap
             ctx.fillStyle = '#4aad1e';
             ctx.fillRect(x - capOverhang, pipe.topH - capH, capW, capH);
             ctx.fillStyle = '#3a8c18';
             ctx.fillRect(x - capOverhang, pipe.topH - capH, capW, 4);
             ctx.fillRect(x - capOverhang, pipe.topH - 4, capW, 4);
-            // Top pipe highlight
             ctx.fillStyle = 'rgba(255,255,255,0.15)';
             ctx.fillRect(x + 4, 0, 8, pipe.topH - capH);
 
-            // Bottom pipe body
+            // Bottom pipe
             const bottomTop = pipe.bottomY;
             drawGradientRect(x, bottomTop + capH, bodyW, PLAY_H - bottomTop - capH, '#5cbf2a', '#73d147', false);
-            // Bottom pipe cap
             ctx.fillStyle = '#4aad1e';
             ctx.fillRect(x - capOverhang, bottomTop, capW, capH);
             ctx.fillStyle = '#3a8c18';
             ctx.fillRect(x - capOverhang, bottomTop, capW, 4);
             ctx.fillRect(x - capOverhang, bottomTop + capH - 4, capW, 4);
-            // Bottom pipe highlight
             ctx.fillStyle = 'rgba(255,255,255,0.15)';
             ctx.fillRect(x + 4, bottomTop + capH, 8, PLAY_H - bottomTop - capH);
 
-            // Pipe edges (dark outlines)
+            // Outlines
             ctx.strokeStyle = '#2a7a10';
             ctx.lineWidth = 1.5;
             ctx.strokeRect(x, 0, bodyW, pipe.topH - capH);
@@ -288,7 +451,7 @@
             ctx.strokeRect(x - capOverhang, bottomTop, capW, capH);
         }
 
-        // ── Draw Bird ──
+        // ── Bird ──
         function drawBird() {
             const bx = BIRD_X;
             const by = bird.y;
@@ -319,7 +482,7 @@
             ctx.fill();
             ctx.stroke();
 
-            // Eye (white)
+            // Eye white
             ctx.fillStyle = '#fff';
             ctx.beginPath();
             ctx.arc(7, -5, 6, 0, Math.PI * 2);
@@ -352,7 +515,7 @@
             ctx.lineWidth = 1;
             ctx.stroke();
 
-            // Tail feathers
+            // Tail
             ctx.fillStyle = '#e6b820';
             ctx.beginPath();
             ctx.moveTo(-16, -4);
@@ -373,22 +536,24 @@
         // ── Score Display ──
         function drawScore() {
             ctx.save();
-            ctx.font = 'bold 48px "Segoe UI", Arial, sans-serif';
+            ctx.font = 'bold 48px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
             ctx.lineWidth = 4;
             ctx.strokeStyle = '#555';
             ctx.fillStyle = '#fff';
-            ctx.strokeText(score, BASE_W / 2, 60);
-            ctx.fillText(score, BASE_W / 2, 60);
+            ctx.strokeText(score, BASE_W / 2, 20);
+            ctx.fillText(score, BASE_W / 2, 20);
             ctx.restore();
         }
 
         // ── Menu Screen ──
         function drawMenu() {
-            // Title
             ctx.save();
-            ctx.font = 'bold 44px "Segoe UI", Arial, sans-serif';
             ctx.textAlign = 'center';
+
+            // Title
+            ctx.font = 'bold 44px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.lineWidth = 5;
             ctx.strokeStyle = '#555';
             ctx.fillStyle = '#fff';
@@ -396,19 +561,22 @@
             ctx.strokeText('Flappy Bird', BASE_W / 2, titleY);
             ctx.fillText('Flappy Bird', BASE_W / 2, titleY);
 
-            // Subtitle
-            ctx.font = '20px "Segoe UI", Arial, sans-serif';
+            // Instruction - platform-aware
+            ctx.font = '18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.lineWidth = 3;
-            ctx.fillStyle = '#fff';
-            ctx.strokeStyle = '#555';
             const subAlpha = 0.6 + Math.sin(frameCount * 0.08) * 0.4;
             ctx.globalAlpha = subAlpha;
-            ctx.strokeText('Tap or Press Space to Start', BASE_W / 2, 420);
-            ctx.fillText('Tap or Press Space to Start', BASE_W / 2, 420);
+            ctx.strokeStyle = '#555';
+            ctx.fillStyle = '#fff';
+
+            const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+            const instructionText = isTouchDevice ? 'Tap to Start' : 'Press Space or Click to Start';
+            ctx.strokeText(instructionText, BASE_W / 2, 420);
+            ctx.fillText(instructionText, BASE_W / 2, 420);
             ctx.globalAlpha = 1;
 
             if (bestScore > 0) {
-                ctx.font = '18px "Segoe UI", Arial, sans-serif';
+                ctx.font = '18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
                 ctx.fillStyle = '#ffe14d';
                 ctx.strokeStyle = '#555';
                 ctx.lineWidth = 2;
@@ -420,20 +588,20 @@
 
         // ── Game Over Screen ──
         function drawGameOver() {
-            // Overlay
             ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
             ctx.fillRect(0, 0, BASE_W, BASE_H);
 
-            // Panel
             const panelW = 260;
-            const panelH = 220;
+            const panelH = 230;
             const px = (BASE_W - panelW) / 2;
             const py = (PLAY_H - panelH) / 2 - 20;
 
+            // Panel border
             ctx.fillStyle = '#deb758';
             roundRect(px - 4, py - 4, panelW + 8, panelH + 8, 12);
             ctx.fill();
 
+            // Panel bg
             ctx.fillStyle = '#f5e6b8';
             roundRect(px, py, panelW, panelH, 10);
             ctx.fill();
@@ -441,24 +609,26 @@
             ctx.save();
             ctx.textAlign = 'center';
 
-            // Game Over text
-            ctx.font = 'bold 34px "Segoe UI", Arial, sans-serif';
+            // Game Over title
+            ctx.font = 'bold 34px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.fillStyle = '#d4422a';
             ctx.strokeStyle = '#fff';
             ctx.lineWidth = 2;
             ctx.strokeText('Game Over', BASE_W / 2, py + 45);
             ctx.fillText('Game Over', BASE_W / 2, py + 45);
 
-            // Score
-            ctx.font = '20px "Segoe UI", Arial, sans-serif';
+            // Score label
+            ctx.font = '20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.fillStyle = '#555';
             ctx.fillText('Score', BASE_W / 2, py + 85);
-            ctx.font = 'bold 36px "Segoe UI", Arial, sans-serif';
+
+            // Score number
+            ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.fillStyle = '#333';
             ctx.fillText(score, BASE_W / 2, py + 120);
 
-            // Best
-            ctx.font = '16px "Segoe UI", Arial, sans-serif';
+            // Best label
+            ctx.font = '16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.fillStyle = '#888';
             ctx.fillText('Best: ' + bestScore, BASE_W / 2, py + 150);
 
@@ -473,63 +643,84 @@
                 ctx.lineWidth = 1.5;
                 ctx.stroke();
                 ctx.fillStyle = '#fff';
-                ctx.font = '14px Arial';
-                ctx.fillText('★', px + 50, py + 110);
+                ctx.font = '16px Arial, sans-serif';
+                ctx.fillText('\u2605', px + 50, py + 110);
             }
 
             // Restart button
-            const btnW = 160;
-            const btnH = 40;
+            const btnW = 180;
+            const btnH = 48;
             const btnX = (BASE_W - btnW) / 2;
-            const btnY = py + panelH - 55;
+            const btnY = py + panelH - 62;
 
-            ctx.fillStyle = '#5cbf2a';
-            roundRect(btnX, btnY, btnW, btnH, 8);
+            // Button shadow
+            ctx.fillStyle = '#3a8c18';
+            roundRect(btnX, btnY + 3, btnW, btnH, 10);
             ctx.fill();
-            ctx.strokeStyle = '#4aad1e';
-            ctx.lineWidth = 2;
-            roundRect(btnX, btnY, btnW, btnH, 8);
-            ctx.stroke();
 
-            ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+            // Button face
+            ctx.fillStyle = '#5cbf2a';
+            roundRect(btnX, btnY, btnW, btnH, 10);
+            ctx.fill();
+
+            // Button highlight
+            ctx.fillStyle = 'rgba(255,255,255,0.2)';
+            roundRect(btnX + 4, btnY + 2, btnW - 8, btnH / 2 - 2, 8);
+            ctx.fill();
+
+            ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
             ctx.fillStyle = '#fff';
-            ctx.fillText('Play Again', BASE_W / 2, btnY + 27);
+            ctx.fillText('Play Again', BASE_W / 2, btnY + 31);
 
             ctx.restore();
         }
 
-        function roundRect(x, y, w, h, r) {
-            ctx.beginPath();
-            ctx.moveTo(x + r, y);
-            ctx.lineTo(x + w - r, y);
-            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-            ctx.lineTo(x + w, y + h - r);
-            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-            ctx.lineTo(x + r, y + h);
-            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-            ctx.lineTo(x, y + r);
-            ctx.quadraticCurveTo(x, y, x + r, y);
-            ctx.closePath();
+        // ── Pause Indicator ──
+        function drawPauseIndicator() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(0, 0, BASE_W, BASE_H);
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
+            ctx.fillStyle = '#fff';
+            ctx.fillText('Paused', BASE_W / 2, PLAY_H / 2);
+            ctx.font = '18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.fillText('Tap to resume', BASE_W / 2, PLAY_H / 2 + 35);
+            ctx.restore();
         }
 
-        // ── Update ──
+        // ── Update Logic ──
         let lastTime = 0;
         let accumulator = 0;
         const TICK = 1000 / 60;
 
         function update(now) {
-            const dt = Math.min(now - lastTime, 100);
+            requestAnimationFrame(update);
+
+            if (isPaused) {
+                draw();
+                if (gameState === GameState.PLAYING) {
+                    drawPauseIndicator();
+                }
+                lastTime = now;
+                accumulator = 0;
+                return;
+            }
+
+            const dt = Math.min(now - lastTime, 200);
             lastTime = now;
             accumulator += dt;
 
-            while (accumulator >= TICK) {
+            let steps = 0;
+            while (accumulator >= TICK && steps < 5) {
                 accumulator -= TICK;
                 frameCount++;
                 tick(now);
+                steps++;
             }
 
             draw();
-            requestAnimationFrame(update);
         }
 
         function tick(now) {
@@ -551,7 +742,7 @@
                     gameState = GameState.DEAD;
                     if (score > bestScore) {
                         bestScore = score;
-                        localStorage.setItem('flappyBest', bestScore.toString());
+                        safeStorageSet('flappyBest', bestScore.toString());
                     }
                 }
                 return;
@@ -570,7 +761,6 @@
                 bird.rotation = Math.min(Math.PI / 2, bird.rotation + 0.04);
             }
 
-            // Wing animation
             if (bird.flapFrame > 0) bird.flapFrame--;
 
             // Pipe generation
@@ -579,18 +769,16 @@
                 lastPipeTime = now;
             }
 
-            // Move pipes
+            // Move & score pipes
             for (let i = pipes.length - 1; i >= 0; i--) {
                 pipes[i].x -= PIPE_SPEED;
 
-                // Score
                 if (!pipes[i].scored && pipes[i].x + PIPE_WIDTH < BIRD_X) {
                     pipes[i].scored = true;
                     score++;
                     spawnParticles(BIRD_X, bird.y - 20, 5, '#ffe14d');
                 }
 
-                // Remove off-screen
                 if (pipes[i].x + PIPE_WIDTH < -10) {
                     pipes.splice(i, 1);
                 }
@@ -601,6 +789,10 @@
                 gameState = GameState.DYING;
                 spawnParticles(BIRD_X, bird.y, 15, '#f5a623');
                 spawnParticles(BIRD_X, bird.y, 10, '#fff');
+                // Vibrate on supported devices
+                if (navigator.vibrate) {
+                    try { navigator.vibrate(50); } catch(e) {}
+                }
             }
         }
 
@@ -609,24 +801,14 @@
             ctx.clearRect(0, 0, BASE_W, BASE_H);
 
             drawBackground();
-
-            // Pipes
             pipes.forEach(drawPipe);
-
-            // Ground
             drawGround();
-
-            // Bird
             drawBird();
-
-            // Particles
             drawParticles();
 
-            // UI
             if (gameState === GameState.PLAYING) {
                 drawScore();
             } else if (gameState === GameState.MENU) {
-                drawBird(); // extra draw for visibility
                 drawMenu();
             } else if (gameState === GameState.DEAD) {
                 drawScore();
@@ -636,11 +818,48 @@
             }
         }
 
-        // ── Start ──
+        // ── Fullscreen support (Android) ──
+        function tryFullscreen() {
+            const el = document.documentElement;
+            if (el.requestFullscreen) {
+                el.requestFullscreen().catch(() => {});
+            } else if (el.webkitRequestFullscreen) {
+                el.webkitRequestFullscreen();
+            }
+        }
+
+        // On first touch, try fullscreen on Android
+        let hasTriedFullscreen = false;
+        document.addEventListener('touchstart', () => {
+            if (!hasTriedFullscreen) {
+                hasTriedFullscreen = true;
+                // Only on Android (iOS doesn't support fullscreen API for games)
+                const isAndroid = /android/i.test(navigator.userAgent);
+                if (isAndroid) {
+                    tryFullscreen();
+                }
+            }
+        }, { once: false, passive: true });
+
+        // ── Prevent iOS Safari bounce on edges ──
+        document.body.addEventListener('touchmove', e => {
+            if (e.target === canvas || e.target === container || e.target === document.body) {
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        // ── Start game loop ──
         requestAnimationFrame(function start(now) {
             lastTime = now;
             requestAnimationFrame(update);
         });
+
+        // ── Log platform info for debugging ──
+        console.log('Flappy Bird loaded. Platform:', navigator.platform,
+            '| Touch:', ('ontouchstart' in window),
+            '| DPR:', window.devicePixelRatio,
+            '| Screen:', screen.width + 'x' + screen.height);
+
     })();
     </script>
 </body>
